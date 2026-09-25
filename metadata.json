@@ -1,0 +1,6 @@
+{
+  "name": "Zira3i AI — الطبيب الزراعي الذكي",
+  "description": "تشخيص فوري وذكي لأمراض النباتات والمحاصيل الزراعية، إرشادات العلاج والوقاية والري للفلاح الجزائري والمغاربي مدعوم بالذكاء الاصطناعي.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
