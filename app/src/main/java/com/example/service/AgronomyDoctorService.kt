@@ -4,10 +4,12 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Log
 import com.example.BuildConfig
 import com.example.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
@@ -16,32 +18,148 @@ import java.util.UUID
 
 object AgronomyDoctorService {
 
+    private const val TAG = "AgronomyDoctor"
+
+    // Backend rejects inline images above 180k base64 chars (NVIDIA NIM limit).
+    private const val MAX_IMAGE_B64_CHARS = 170_000
+    private const val MAX_IMAGE_EDGE_PX = 1024
+
+    /**
+     * Asks the Zira3i backend (NVIDIA NIM) for a diagnosis. If the backend is unreachable,
+     * misconfigured or returns something unusable, falls back to the on-device knowledge base
+     * so the farmer always gets an answer, even offline in the field.
+     */
     suspend fun analyzePlantQuery(
         context: Context,
         prompt: String,
-        imageUri: Uri?
+        imageUri: Uri?,
+        languageCode: String = "ar"
     ): Pair<String, DiagnosticReport?> = withContext(Dispatchers.IO) {
-        val apiKey = try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Throwable) {
-            ""
-        }
-
-        // If an API key is available, attempt real Gemini call
-        if (apiKey.isNotEmpty() && apiKey != "MY_GEMINI_API_KEY") {
-            try {
-                val geminiResult = callGemini(context, apiKey, prompt, imageUri)
-                if (geminiResult != null) {
-                    return@withContext geminiResult
-                }
-            } catch (e: Exception) {
-                // Graceful fallback to expert Agronomy Doctor knowledge engine
-            }
+        try {
+            val imageBase64 = imageUri?.let { encodeImageForUpload(context, it) }
+            return@withContext callBackend(prompt, imageBase64, languageCode)
+        } catch (e: Exception) {
+            Log.w(TAG, "Backend diagnosis failed, using offline knowledge base", e)
         }
 
         // Expert Agronomy Doctor Knowledge Base (Algerian crop specialization)
         return@withContext generateExpertDiagnosis(prompt, imageUri)
     }
+
+    private fun callBackend(
+        prompt: String,
+        imageBase64: String?,
+        languageCode: String
+    ): Pair<String, DiagnosticReport> {
+        val baseUrl = BuildConfig.ZIRA3I_BACKEND_URL.trimEnd('/')
+        val conn = URL("$baseUrl/api/v1/diagnose").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("Accept", "application/json")
+            conn.connectTimeout = 10_000
+            // Backend may try several models plus a JSON repair pass.
+            conn.readTimeout = 150_000
+            conn.doOutput = true
+
+            val requestJson = JSONObject()
+                .put("prompt", prompt)
+                .put("language", if (languageCode in setOf("ar", "fr", "en")) languageCode else "ar")
+            if (imageBase64 != null) {
+                requestJson.put("imageBase64", imageBase64).put("imageMimeType", "image/jpeg")
+            }
+            conn.outputStream.use { it.write(requestJson.toString().toByteArray(Charsets.UTF_8)) }
+
+            val code = conn.responseCode
+            if (code != HttpURLConnection.HTTP_OK) {
+                val err = conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty()
+                throw IllegalStateException("Backend HTTP $code: ${err.take(300)}")
+            }
+            val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            return parseDiagnoseResponse(body)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /** Downscales and re-compresses until the base64 payload fits the backend limit. */
+    private fun encodeImageForUpload(context: Context, uri: Uri): String? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_IMAGE_EDGE_PX) sample *= 2
+
+        var bitmap = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+        } ?: return null
+
+        var quality = 80
+        while (true) {
+            val out = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, quality, out)
+            val b64 = android.util.Base64.encodeToString(out.toByteArray(), android.util.Base64.NO_WRAP)
+            if (b64.length <= MAX_IMAGE_B64_CHARS) return b64
+            if (quality > 50) {
+                quality -= 10
+            } else {
+                if (bitmap.width < 256) return null
+                bitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width * 3 / 4, bitmap.height * 3 / 4, true)
+            }
+        }
+    }
+
+    internal fun parseDiagnoseResponse(body: String): Pair<String, DiagnosticReport> {
+        val root = JSONObject(body)
+        val r = root.getJSONObject("report")
+        val water = r.getJSONObject("waterAdvisor")
+        val quantum = r.getJSONObject("quantumOptimization")
+        val treatments = r.getJSONObject("treatments")
+
+        val report = DiagnosticReport(
+            id = r.optString("id").ifBlank { UUID.randomUUID().toString() },
+            cropName = r.getString("cropName"),
+            diseaseName = r.getString("diseaseName"),
+            scientificName = r.optString("scientificName"),
+            confidenceScore = r.optInt("confidenceScore").coerceIn(0, 100),
+            severity = SeverityLevel.entries.firstOrNull { it.name == r.optString("severity") }
+                ?: SeverityLevel.MODERATE,
+            summary = r.optString("summary"),
+            symptoms = r.optJSONArray("symptoms").toStringList(),
+            alternativeHypotheses = r.optJSONArray("alternativeHypotheses").toObjectList { alt ->
+                AlternativeDiagnosis(
+                    conditionName = alt.optString("conditionName"),
+                    probability = alt.optInt("probability").coerceIn(0, 100),
+                    distinguishingFactor = alt.optString("distinguishingFactor")
+                )
+            },
+            waterAdvisor = WaterAdvisorData(
+                dailyRequirement = water.optString("dailyRequirement"),
+                irrigationSchedule = water.optString("irrigationSchedule"),
+                soilMoistureTarget = water.optString("soilMoistureTarget"),
+                droughtMitigationTip = water.optString("droughtMitigationTip")
+            ),
+            quantumOptimization = QuantumWaterOptimization(
+                efficiencyGainPercent = quantum.optInt("efficiencyGainPercent").coerceIn(0, 100),
+                statusText = quantum.optString("statusText"),
+                rootZoneTargeting = quantum.optString("rootZoneTargeting"),
+                stressIndex = quantum.optString("stressIndex")
+            ),
+            treatments = TreatmentPlan(
+                organicRemedy = treatments.optString("organicRemedy"),
+                chemicalTreatment = treatments.optString("chemicalTreatment"),
+                culturalPractices = treatments.optJSONArray("culturalPractices").toStringList()
+            ),
+            safetyDisclaimer = r.optString("safetyDisclaimer")
+                .ifBlank { DiagnosticReport.DEFAULT_SAFETY_DISCLAIMER }
+        )
+        return Pair(root.optString("reply").ifBlank { report.summary }, report)
+    }
+
+    private fun JSONArray?.toStringList(): List<String> =
+        if (this == null) emptyList() else (0 until length()).map { optString(it) }.filter { it.isNotBlank() }
+
+    private fun <T> JSONArray?.toObjectList(map: (JSONObject) -> T): List<T> =
+        if (this == null) emptyList() else (0 until length()).mapNotNull { optJSONObject(it)?.let(map) }
 
     private fun generateExpertDiagnosis(
         prompt: String,
@@ -232,98 +350,5 @@ object AgronomyDoctorService {
         """.trimIndent()
 
         return Pair(responseText, report)
-    }
-
-    private suspend fun callGemini(
-        context: Context,
-        apiKey: String,
-        prompt: String,
-        imageUri: Uri?
-    ): Pair<String, DiagnosticReport?>? = withContext(Dispatchers.IO) {
-        try {
-            val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
-            val conn = url.openConnection() as HttpURLConnection
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.connectTimeout = 30000
-            conn.readTimeout = 30000
-            conn.doOutput = true
-
-            val systemPrompt = """
-You are "Zira3i AI" (زرعي AI), an expert Agricultural AI Doctor and Agronomist specializing in North African and Algerian agriculture (crops like tomatoes, potatoes, olives, dates, citrus).
-When given a user query or crop photo:
-1. Analyze the symptoms, provide the disease name in Arabic and scientific Latin name.
-2. Provide a confidence score (between 70 and 98).
-3. Offer alternative hypotheses.
-4. Give a precise Water Advisor (مستشار الري) recommendation.
-5. Provide a Quantum-inspired water optimization metric for water scarcity.
-6. Provide treatments and mandatory safety warning.
-Respond in fluent, professional Arabic.
-            """.trimIndent()
-
-            val contentsArray = org.json.JSONArray()
-            val contentObj = JSONObject()
-            val partsArray = org.json.JSONArray()
-
-            // Text part
-            val textPart = JSONObject()
-            textPart.put("text", "$systemPrompt\n\nUser Question: $prompt")
-            partsArray.put(textPart)
-
-            // Image part if available
-            if (imageUri != null) {
-                try {
-                    val inputStream = context.contentResolver.openInputStream(imageUri)
-                    val bitmap = BitmapFactory.decodeStream(inputStream)
-                    inputStream?.close()
-                    if (bitmap != null) {
-                        val outputStream = ByteArrayOutputStream()
-                        bitmap.compress(Bitmap.CompressFormat.JPEG, 75, outputStream)
-                        val bytes = outputStream.toByteArray()
-                        val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-
-                        val imgPart = JSONObject()
-                        val inlineData = JSONObject()
-                        inlineData.put("mimeType", "image/jpeg")
-                        inlineData.put("data", base64)
-                        imgPart.put("inlineData", inlineData)
-                        partsArray.put(imgPart)
-                    }
-                } catch (e: Exception) {
-                    // ignore image encoding error
-                }
-            }
-
-            contentObj.put("parts", partsArray)
-            contentsArray.put(contentObj)
-
-            val requestJson = JSONObject()
-            requestJson.put("contents", contentsArray)
-
-            conn.outputStream.use { os ->
-                os.write(requestJson.toString().toByteArray(Charsets.UTF_8))
-            }
-
-            val responseCode = conn.responseCode
-            if (responseCode == 200) {
-                val responseStr = conn.inputStream.bufferedReader().use { it.readText() }
-                val rootJson = JSONObject(responseStr)
-                val candidates = rootJson.optJSONArray("candidates")
-                if (candidates != null && candidates.length() > 0) {
-                    val cand = candidates.getJSONObject(0)
-                    val content = cand.optJSONObject("content")
-                    val parts = content?.optJSONArray("parts")
-                    val answerText = parts?.getJSONObject(0)?.optString("text") ?: ""
-                    if (answerText.isNotEmpty()) {
-                        // Generate a structured report based on the response
-                        val report = generateExpertDiagnosis(prompt + " " + answerText, imageUri).second
-                        return@withContext Pair(answerText, report)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            // Log and fallback
-        }
-        return@withContext null
     }
 }

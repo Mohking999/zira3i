@@ -13,8 +13,12 @@ data class DiagnosticReport(
     val waterAdvisor: WaterAdvisorData,
     val quantumOptimization: QuantumWaterOptimization,
     val treatments: TreatmentPlan,
-    val safetyDisclaimer: String = "تنبيه أمان زراعي: تجنب الاستخدام العشوائي للمبيدات الفطرية أو الكيميائية. يجب الالتزام الصارم بالجرعات الموصى بها وفترة الأمان قبل الجني (PHI)، واستشارة مهندس وقاية النباتات المعتمد في منطقتك الزراعية."
-)
+    val safetyDisclaimer: String = DEFAULT_SAFETY_DISCLAIMER
+) {
+    companion object {
+        const val DEFAULT_SAFETY_DISCLAIMER = "تنبيه أمان زراعي: تجنب الاستخدام العشوائي للمبيدات الفطرية أو الكيميائية. يجب الالتزام الصارم بالجرعات الموصى بها وفترة الأمان قبل الجني (PHI)، واستشارة مهندس وقاية النباتات المعتمد في منطقتك الزراعية."
+    }
+}
 
 enum class SeverityLevel(val labelArabic: String) {
     LOW("منخفضة الخطورة"),

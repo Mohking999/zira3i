@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.localization.LocalAppLanguage
 import com.example.localization.LocalAppStrings
 import com.example.model.DiagnosticReport
 import com.example.service.AgronomyDoctorService
@@ -49,6 +50,7 @@ fun DiagnosisScreen(
     val coroutineScope = rememberCoroutineScope()
     val colors = LocalAppColors.current
     val strings = LocalAppStrings.current
+    val lang = LocalAppLanguage.current
 
     var inputPrompt by remember { mutableStateOf(initialPrompt ?: "") }
     var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -72,7 +74,8 @@ fun DiagnosisScreen(
             val (_, report) = AgronomyDoctorService.analyzePlantQuery(
                 context = context,
                 prompt = inputPrompt,
-                imageUri = selectedImageUri
+                imageUri = selectedImageUri,
+                languageCode = lang.code
             )
             diagnosisReport = report
             isAnalyzing = false

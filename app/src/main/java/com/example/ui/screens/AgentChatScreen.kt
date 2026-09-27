@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.localization.LocalAppLanguage
 import com.example.model.ChatMessage
 import com.example.model.MessageSender
 import com.example.service.AgronomyDoctorService
@@ -50,6 +51,7 @@ fun AgentChatScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val listState = rememberLazyListState()
+    val lang = LocalAppLanguage.current
 
     var messages by remember { mutableStateOf<List<ChatMessage>>(emptyList()) }
     var inputText by remember { mutableStateOf(initialPrompt ?: "") }
@@ -85,7 +87,8 @@ fun AgentChatScreen(
             val (doctorReply, report) = AgronomyDoctorService.analyzePlantQuery(
                 context = context,
                 prompt = queryText,
-                imageUri = imageUri
+                imageUri = imageUri,
+                languageCode = lang.code
             )
 
             val doctorMessage = ChatMessage(

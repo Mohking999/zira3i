@@ -1,0 +1,46 @@
+{
+  "reply": "Peacock spot detected.",
+  "report": {
+    "id": "fixed-id",
+    "cropName": "Olive (Olea europaea)",
+    "diseaseName": "Olive peacock spot",
+    "scientificName": "Venturia oleaginea",
+    "confidenceScore": 87,
+    "severity": "MODERATE",
+    "summary": "Fungal leaf spot common in humid Algerian orchards.",
+    "symptoms": [
+      "Circular dark spots",
+      "Yellow halo",
+      "Leaf drop"
+    ],
+    "alternativeHypotheses": [
+      {
+        "conditionName": "Boron deficiency",
+        "probability": 12,
+        "distinguishingFactor": "No rings"
+      }
+    ],
+    "waterAdvisor": {
+      "dailyRequirement": "25-35 L/tree twice weekly",
+      "irrigationSchedule": "Dawn drip",
+      "soilMoistureTarget": "55-65%",
+      "droughtMitigationTip": "Mulch the basin"
+    },
+    "quantumOptimization": {
+      "efficiencyGainPercent": 100,
+      "statusText": "Pulse drip",
+      "rootZoneTargeting": "40-60 cm",
+      "stressIndex": "Low"
+    },
+    "treatments": {
+      "organicRemedy": "Bordeaux mixture after pruning",
+      "chemicalTreatment": "Copper-based fungicide per label",
+      "culturalPractices": [
+        "Prune for airflow",
+        "Remove fallen leaves"
+      ]
+    },
+    "safetyDisclaimer": "Avertissement de sécurité : évitez l'usage aléatoire de fongicides ou de produits chimiques. Respectez strictement les doses homologuées et le délai avant récolte (DAR), et consultez un ingénieur agronome agréé de votre région."
+  },
+  "model": "test-model"
+}
