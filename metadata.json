@@ -1,0 +1,6 @@
+{
+  "name": "Zira3i AI",
+  "description": "Zira3i AI (زرعي) - Agricultural AI Doctor with Claude-inspired minimalist design, plant disease diagnosis, water advisor, and quantum-inspired irrigation optimization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
