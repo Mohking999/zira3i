@@ -641,7 +641,7 @@ export default function App() {
           <div className="flex items-center gap-2 font-bold text-slate-700">
             <span>🌾 Zira3i AI — من الصورة إلى القرار</span>
             <span className="text-slate-300">|</span>
-            <span className="text-emerald-700 font-semibold">Gemini 3.8 Multi-modal Decision Engine</span>
+            <span className="text-emerald-700 font-semibold">AgriChat Multi-modal Decision Engine</span>
           </div>
           <p className="text-[11px] text-slate-500">
             {language === 'fr'

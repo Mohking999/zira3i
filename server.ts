@@ -1,6 +1,5 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -15,29 +14,10 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '25mb' }));
 
-const rawApiKey = process.env.GEMINI_API_KEY;
-const isGeminiConfigured = Boolean(
-  rawApiKey &&
-  rawApiKey.trim() !== '' &&
-  rawApiKey !== 'MY_GEMINI_API_KEY' &&
-  !rawApiKey.startsWith('MY_')
-);
-
-let aiClient: GoogleGenAI | null = null;
-if (isGeminiConfigured) {
-  try {
-    aiClient = new GoogleGenAI({
-      apiKey: rawApiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  } catch (err) {
-    console.warn('Failed to initialize GoogleGenAI client, will use fallback knowledge base', err);
-  }
-}
+const brevApiUrl = (process.env.BREV_API_URL || 'https://jupyter-63xi24bh0.gobrev.dev').replace(/\/+$/, '');
+const brevApiKey = process.env.BREV_API_KEY || process.env.ZIRA3I_API_KEY;
+const modelName = process.env.AGRI_MODEL || 'AgriChat/LLaVA-OneVision';
+const isModelConfigured = Boolean(brevApiKey && brevApiKey.trim() !== '');
 
 interface DiagnosisResult {
   diseaseName: string;
@@ -63,7 +43,7 @@ interface DiagnosisResult {
   irrigationSchedule: string;
   fertilizationAdvice: string;
   algerianContextNote: string;
-  engineUsed: 'gemini-3.8-flash' | 'zira3i-agri-engine';
+  engineUsed: 'agri-chat-llava-onevision' | 'zira3i-agri-engine';
 }
 
 function generateLocalDecision(
@@ -424,8 +404,8 @@ function generateLocalDecision(
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'ok',
-    aiConnected: isGeminiConfigured && aiClient !== null,
-    model: isGeminiConfigured ? 'gemini-3.8-flash' : 'zira3i-agri-engine',
+    aiConnected: isModelConfigured,
+    model: isModelConfigured ? modelName : 'zira3i-agri-engine',
     version: '3.0.0',
     framework: 'Decision-Support-System (من الصورة إلى القرار)',
     capabilities: {
@@ -462,7 +442,7 @@ app.post('/api/diagnose', async (req, res) => {
       });
     }
 
-    if (isGeminiConfigured && aiClient) {
+    if (isModelConfigured) {
       try {
         const langPrompt = language === 'fr'
           ? 'Réponds impérativement en français clair, précis et orienté ACTION pour des agriculteurs et ingénieurs agronomes.'
@@ -506,102 +486,36 @@ app.post('/api/diagnose', async (req, res) => {
 ${langPrompt}
 `;
 
-        const contentsParts: any[] = [];
-        if (imageBase64) {
-          const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
-          contentsParts.push({
-            inlineData: {
-              data: cleanBase64,
-              mimeType: mimeType || 'image/jpeg',
-            },
-          });
+        if (!imageBase64) {
+          throw new Error('Brev diagnose requires an image file');
         }
-        contentsParts.push({ text: promptText });
 
-        const response = await aiClient.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: { parts: contentsParts },
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                diseaseName: { type: Type.STRING },
-                scientificName: { type: Type.STRING },
-                cropDetected: { type: Type.STRING },
-                wilayaContext: { type: Type.STRING },
-                growthStageContext: { type: Type.STRING },
-                qualitativeCertainty: { type: Type.STRING },
-                supportingEvidence: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                severity: { type: Type.STRING },
-                favorableConditions: { type: Type.STRING },
-                summary: { type: Type.STRING },
-                symptoms: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                actionNow: {
-                  type: Type.OBJECT,
-                  properties: {
-                    headline: { type: Type.STRING },
-                    urgentSteps: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
-                    },
-                  },
-                  required: ['headline', 'urgentSteps'],
-                },
-                warningDoNotDo: { type: Type.STRING },
-                followUpSchedule: { type: Type.STRING },
-                treatmentOrganic: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                treatmentChemical: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                prevention: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                },
-                irrigationSchedule: { type: Type.STRING },
-                fertilizationAdvice: { type: Type.STRING },
-                algerianContextNote: { type: Type.STRING },
-              },
-              required: [
-                'diseaseName',
-                'scientificName',
-                'cropDetected',
-                'qualitativeCertainty',
-                'supportingEvidence',
-                'severity',
-                'favorableConditions',
-                'summary',
-                'symptoms',
-                'actionNow',
-                'warningDoNotDo',
-                'followUpSchedule',
-                'treatmentOrganic',
-                'treatmentChemical',
-                'prevention',
-                'irrigationSchedule',
-                'fertilizationAdvice',
-                'algerianContextNote',
-              ],
-            },
+        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
+        const formData = new FormData();
+        formData.append(
+          'file',
+          new Blob([Buffer.from(cleanBase64, 'base64')], { type: mimeType || 'image/jpeg' }),
+          imageName || 'plant-image.jpg',
+        );
+        formData.append('question', promptText);
+
+        const response = await fetch(`${brevApiUrl}/diagnose`, {
+          method: 'POST',
+          headers: {
+            'X-API-Key': brevApiKey || '',
           },
+          body: formData,
         });
 
-        const rawText = response.text || '';
-        const parsed = JSON.parse(rawText);
-        parsed.engineUsed = 'gemini-3.8-flash';
+        if (!response.ok) {
+          throw new Error(`Brev model request failed (${response.status}): ${await response.text()}`);
+        }
+
+        const parsed = await response.json() as DiagnosisResult;
+        parsed.engineUsed = 'agri-chat-llava-onevision';
         return res.json(parsed);
-      } catch (geminiError: any) {
-        console.warn('Gemini call encountered issue, falling back seamlessly to agri-decision engine:', geminiError?.message || geminiError);
+      } catch (modelError: any) {
+        console.warn('Brev model call failed, falling back to agri-decision engine:', modelError?.message || modelError);
         const fallback = generateLocalDecision(cropType, wilaya, growthStage, description, imageName, language);
         return res.json(fallback);
       }
@@ -634,7 +548,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌾 Zira3i AI (Decision Support) running at http://0.0.0.0:${PORT}`);
-    console.log(`Gemini status: ${isGeminiConfigured ? 'Active (gemini-3.8-flash)' : 'Local Decision Support Engine (Standalone Ready)'}`);
+    console.log(`Brev model status: ${isModelConfigured ? `Active (${modelName})` : 'Local Decision Support Engine (Standalone Ready)'}`);
   });
 }
 

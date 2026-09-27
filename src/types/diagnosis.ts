@@ -47,7 +47,7 @@ export interface DiagnosisData {
   fertilizationAdvice: string;
   algerianContextNote: string;
 
-  engineUsed?: 'gemini-3.8-flash' | 'zira3i-agri-engine';
+  engineUsed?: 'agri-chat-llava-onevision' | 'zira3i-agri-engine';
 }
 
 export interface BatchItem {

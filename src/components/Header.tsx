@@ -84,7 +84,7 @@ export const Header: React.FC<HeaderProps> = ({
               </span>
               <span>
                 {engineStatus.aiConnected
-                  ? 'محرك Gemini 3.8 متصل'
+                  ? 'محرك AgriChat متصل'
                   : 'محرك التشخيص الزراعي الفوري جاهز 100%'}
               </span>
             </div>

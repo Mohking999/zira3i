@@ -96,7 +96,20 @@ export async function requestDiagnosis(params: {
       });
 
       if (res.ok) {
-        const data: DiagnosisData = await res.json();
+        const rawData = await res.json() as Partial<DiagnosisData>;
+        const fallback = generateClientDecisionFallback(params);
+        const data: DiagnosisData = {
+          ...fallback,
+          ...rawData,
+          actionNow: {
+            ...fallback.actionNow,
+            ...(rawData.actionNow || {}),
+          },
+          supportingEvidence: rawData.supportingEvidence || fallback.supportingEvidence,
+          treatmentOrganic: rawData.treatmentOrganic || fallback.treatmentOrganic,
+          treatmentChemical: rawData.treatmentChemical || fallback.treatmentChemical,
+          prevention: rawData.prevention || fallback.prevention,
+        };
         decisionCache.set(cacheKey, data);
         return data;
       }

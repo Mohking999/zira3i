@@ -153,7 +153,7 @@ export const PdfExportModal: React.FC<PdfExportModalProps> = ({
                     رقم الوثيقة: <span className="font-mono text-emerald-800">ZR-{Date.now().toString().slice(-6)}</span>
                   </div>
                   <div>التاريخ: <span className="font-semibold">{formattedDate}</span></div>
-                  <div className="text-[11px] text-emerald-700 font-semibold">استدلال متعدد الوسائط (Gemini AI)</div>
+                  <div className="text-[11px] text-emerald-700 font-semibold">استدلال متعدد الوسائط (AgriChat AI)</div>
                 </div>
 
               </div>
