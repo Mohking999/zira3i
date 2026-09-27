@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
-import { SampleCarousel } from './components/SampleCarousel';
 import { DiagnosisView } from './components/DiagnosisView';
 import { BatchUploader } from './components/BatchUploader';
 import { SessionHistory } from './components/SessionHistory';
 import { SAMPLE_CASES, SampleCase } from './data/samples';
 import { DiagnosisData, SupportedLanguage } from './types/diagnosis';
 import { compressImage, requestDiagnosis } from './utils/api';
+import { loadDiagnosisHistory, loadHistoryPreference, syncDiagnosisHistory } from './utils/history';
 import { FarmerGuideModal } from './components/FarmerGuideModal';
 import {
   UploadCloud,
@@ -88,7 +88,10 @@ export default function App() {
   const [processStep, setProcessStep] = useState<string>('');
   const [diagnosisResult, setDiagnosisResult] = useState<DiagnosisData | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [history, setHistory] = useState<DiagnosisData[]>([]);
+  const [rememberHistory, setRememberHistory] = useState(loadHistoryPreference);
+  const [history, setHistory] = useState<DiagnosisData[]>(() =>
+    loadHistoryPreference() ? loadDiagnosisHistory() : []
+  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultRef = useRef<HTMLDivElement>(null);
@@ -97,6 +100,10 @@ export default function App() {
     document.documentElement.dir = language === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = language;
   }, [language]);
+
+  useEffect(() => {
+    syncDiagnosisHistory(rememberHistory, history);
+  }, [history, rememberHistory]);
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -309,14 +316,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* 1-Click Samples Carousel (PRD F5) */}
-        <SampleCarousel
-          language={language}
-          onSelectSample={handleSelectSample}
-          selectedSampleId={selectedSampleId}
-          isProcessing={isProcessing}
-        />
-
         {/* Session History (PRD F8) */}
         <SessionHistory
           history={history}
@@ -325,6 +324,8 @@ export default function App() {
             resultRef.current?.scrollIntoView({ behavior: 'smooth' });
           }}
           onClear={() => setHistory([])}
+          rememberHistory={rememberHistory}
+          onRememberHistoryChange={setRememberHistory}
           language={language}
         />
 

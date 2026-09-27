@@ -6,6 +6,8 @@ interface SessionHistoryProps {
   history: DiagnosisData[];
   onSelect: (item: DiagnosisData) => void;
   onClear: () => void;
+  rememberHistory: boolean;
+  onRememberHistoryChange: (remember: boolean) => void;
   language: SupportedLanguage;
 }
 
@@ -13,35 +15,57 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
   history,
   onSelect,
   onClear,
+  rememberHistory,
+  onRememberHistoryChange,
   language,
 }) => {
-  if (history.length === 0) return null;
-
   return (
     <div className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm mb-8">
-      <div className="flex items-center justify-between gap-3 mb-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
         <div className="flex items-center gap-2">
           <History className="w-5 h-5 text-emerald-700" />
           <h3 className="font-bold text-slate-900 text-sm sm:text-base">
-            {language === 'fr' ? 'Historique de la session' : 'سجل تشخيصات الجلسة الحالية'}
+            {language === 'fr' ? 'Historique des diagnostics' : 'سجل التشخيصات'}
           </h3>
           <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-bold">
             {history.length}
           </span>
         </div>
 
-        <button
-          onClick={onClear}
-          className="text-xs text-slate-500 hover:text-red-600 flex items-center gap-1 transition-colors cursor-pointer"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-          <span>{language === 'fr' ? 'Effacer l’historique' : 'مسح السجل'}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={rememberHistory}
+              onChange={(event) => onRememberHistoryChange(event.target.checked)}
+              className="h-4 w-4 accent-emerald-700"
+            />
+            <span>{language === 'fr' ? 'Garder sur cet appareil' : 'حفظ السجل على هذا الجهاز'}</span>
+          </label>
+          <button
+            onClick={onClear}
+            disabled={history.length === 0}
+            className="text-xs text-slate-500 hover:text-red-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 transition-colors cursor-pointer"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            <span>{language === 'fr' ? 'Effacer l’historique' : 'مسح السجل'}</span>
+          </button>
+        </div>
       </div>
 
-      <div className="flex gap-3 overflow-x-auto pb-2 pt-1 no-scrollbar">
-        {history.map((item, index) => {
-          return (
+      <p className="text-[11px] text-slate-500 mb-3">
+        {language === 'fr'
+          ? 'Enregistré dans ce navigateur sans les images. Désactiver cette option supprime l’historique sauvegardé.'
+          : 'تُحفظ تفاصيل التشخيص دون الصور في هذا المتصفح فقط. إيقاف الخيار يحذف السجل المحفوظ.'}
+      </p>
+
+      {history.length === 0 ? (
+        <p className="text-xs text-slate-400 py-2">
+          {language === 'fr' ? 'Aucun diagnostic pour le moment.' : 'لا توجد تشخيصات في السجل بعد.'}
+        </p>
+      ) : (
+        <div className="flex gap-3 overflow-x-auto pb-2 pt-1 no-scrollbar">
+          {history.map((item, index) => (
             <button
               key={item.id || index}
               onClick={() => onSelect(item)}
@@ -79,9 +103,9 @@ export const SessionHistory: React.FC<SessionHistoryProps> = ({
                 )}
               </div>
             </button>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

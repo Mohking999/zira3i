@@ -46,6 +46,141 @@ interface DiagnosisResult {
   engineUsed: 'agri-chat-llava-onevision' | 'zira3i-agri-engine';
 }
 
+function parseDiagnosisResponse(
+  payload: unknown,
+  fallback: DiagnosisResult,
+  language: string,
+): DiagnosisResult {
+  let candidate: unknown = payload;
+
+  if (typeof candidate === 'string') {
+    const cleaned = candidate.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    candidate = JSON.parse(cleaned);
+  }
+
+  if (candidate && typeof candidate === 'object') {
+    const envelope = candidate as Record<string, unknown>;
+    const nested = envelope.result ?? envelope.diagnosis ?? envelope.diagnosis_raw ?? envelope.response ?? envelope.output ?? envelope.data;
+    if (nested !== undefined && nested !== null) {
+      candidate = nested;
+      if (typeof candidate === 'string') {
+        const cleaned = candidate.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+        candidate = JSON.parse(cleaned);
+      }
+    }
+  }
+
+  if (!candidate || typeof candidate !== 'object') {
+    throw new Error('Brev model returned an invalid diagnosis response');
+  }
+
+  const diagnosis = candidate as Record<string, unknown>;
+  const modelAction = diagnosis.actionNow && typeof diagnosis.actionNow === 'object'
+    ? diagnosis.actionNow as Record<string, unknown>
+    : undefined;
+
+  if (
+    typeof diagnosis.diseaseName !== 'string' ||
+    typeof diagnosis.cropDetected !== 'string' ||
+    !modelAction ||
+    !Array.isArray(modelAction.urgentSteps) ||
+    !Array.isArray(diagnosis.supportingEvidence)
+  ) {
+    const getText = (...values: unknown[]): string | undefined => {
+      const value = values.find((item) => typeof item === 'string' && item.trim());
+      return typeof value === 'string' ? value.trim() : undefined;
+    };
+    const getList = (...values: unknown[]): string[] => {
+      const value = values.find((item) => Array.isArray(item) || typeof item === 'string');
+      if (Array.isArray(value)) {
+        return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+      }
+      return typeof value === 'string'
+        ? value.split(/[\r\n;]+/).map((item) => item.trim()).filter(Boolean)
+        : [];
+    };
+
+    const diseaseName = getText(diagnosis.diseaseName, diagnosis.disease, diagnosis.diagnosis);
+    if (!diseaseName || diagnosis.structured === false) {
+      const fieldNames = Object.keys(diagnosis).slice(0, 20).join(', ') || 'none';
+      throw new Error(`Brev model returned an incomplete diagnosis response (fields: ${fieldNames})`);
+    }
+
+    const severityText = (getText(diagnosis.severity) || '').toLowerCase();
+    const severity: DiagnosisResult['severity'] = /critical|critique|حرج|شديد جداً/.test(severityText)
+      ? 'critical'
+      : /high|severe|élevée|مرتفع|شديد/.test(severityText)
+        ? 'high'
+        : /low|mild|faible|منخفض|خفيف/.test(severityText)
+          ? 'low'
+          : 'medium';
+
+    const confidence = diagnosis.qualitativeCertainty ?? diagnosis.confidence;
+    const confidenceText = typeof confidence === 'string' ? confidence.toLowerCase() : '';
+    const confidenceNumber = typeof confidence === 'number'
+      ? confidence
+      : Number.parseFloat(confidenceText);
+    const qualitativeCertainty: DiagnosisResult['qualitativeCertainty'] =
+      /high|élevée|مرتفع|عال/.test(confidenceText) || confidenceNumber >= (confidenceNumber > 1 ? 75 : 0.75)
+        ? 'high'
+        : /medium|moderate|moyenne|متوسط|راجح/.test(confidenceText) || confidenceNumber >= (confidenceNumber > 1 ? 45 : 0.45)
+          ? 'medium'
+          : 'low';
+
+    const treatment = getList(diagnosis.treatment, diagnosis.treatments);
+    const evidence = getList(diagnosis.supportingEvidence, diagnosis.evidence, diagnosis.symptoms);
+    const watering = getList(diagnosis.watering, diagnosis.irrigationSchedule).join(' ');
+    const warningFallback = language === 'fr'
+      ? 'Faites confirmer le diagnostic sur le terrain et respectez l’étiquette de tout produit.'
+      : language === 'en'
+        ? 'Confirm the diagnosis in the field and follow the label for any product.'
+        : 'تأكد من التشخيص ميدانياً واتبع ملصق أي منتج قبل استخدامه.';
+    const followUpFallback = language === 'fr'
+      ? 'Réexaminer les plantes dans 3 à 5 jours.'
+      : language === 'en'
+        ? 'Recheck the plants in 3 to 5 days.'
+        : 'أعد فحص النباتات خلال 3 إلى 5 أيام.';
+
+    return {
+      diseaseName,
+      scientificName: getText(diagnosis.scientificName) || 'Not provided',
+      cropDetected: getText(diagnosis.cropDetected, diagnosis.crop) || fallback.cropDetected,
+      wilayaContext: getText(diagnosis.wilayaContext) || fallback.wilayaContext,
+      growthStageContext: getText(diagnosis.growthStageContext) || fallback.growthStageContext,
+      qualitativeCertainty,
+      supportingEvidence: evidence,
+      severity,
+      favorableConditions: getText(diagnosis.favorableConditions) || '',
+      summary: getText(diagnosis.summary) || diseaseName,
+      symptoms: getList(diagnosis.symptoms),
+      actionNow: {
+        headline: getText(modelAction?.headline, diagnosis.action, treatment[0]) || diseaseName,
+        urgentSteps: getList(modelAction?.urgentSteps, treatment),
+      },
+      warningDoNotDo: getText(diagnosis.warningDoNotDo, diagnosis.warning) || warningFallback,
+      followUpSchedule: getText(diagnosis.followUpSchedule, diagnosis.followUp) || followUpFallback,
+      treatmentOrganic: getList(diagnosis.treatmentOrganic),
+      treatmentChemical: getList(diagnosis.treatmentChemical),
+      prevention: getList(diagnosis.prevention),
+      irrigationSchedule: watering,
+      fertilizationAdvice: getText(diagnosis.fertilizationAdvice) || '',
+      algerianContextNote: getText(diagnosis.algerianContextNote) || '',
+      engineUsed: 'agri-chat-llava-onevision',
+    };
+  }
+
+  const fullDiagnosis = diagnosis as unknown as Partial<DiagnosisResult>;
+  return {
+    ...fallback,
+    ...fullDiagnosis,
+    actionNow: { ...fallback.actionNow, ...fullDiagnosis.actionNow },
+    supportingEvidence: fullDiagnosis.supportingEvidence || fallback.supportingEvidence,
+    treatmentOrganic: fullDiagnosis.treatmentOrganic || fallback.treatmentOrganic,
+    treatmentChemical: fullDiagnosis.treatmentChemical || fallback.treatmentChemical,
+    prevention: fullDiagnosis.prevention || fallback.prevention,
+  };
+}
+
 function generateLocalDecision(
   cropType?: string,
   wilaya?: string,
@@ -404,7 +539,7 @@ function generateLocalDecision(
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'ok',
-    aiConnected: isModelConfigured,
+    aiConfigured: isModelConfigured,
     model: isModelConfigured ? modelName : 'zira3i-agri-engine',
     version: '3.0.0',
     framework: 'Decision-Support-System (من الصورة إلى القرار)',
@@ -444,47 +579,21 @@ app.post('/api/diagnose', async (req, res) => {
 
     if (isModelConfigured) {
       try {
+        const isArabic = language === 'ar';
         const langPrompt = language === 'fr'
-          ? 'Réponds impérativement en français clair, précis et orienté ACTION pour des agriculteurs et ingénieurs agronomes.'
-          : 'أجب باللغة العربية الفصحى الواضحة والعملية، الموجهة لاتخاذ القرار والإجراء الميداني الفوري للفلاح الجزائري والمغاربي.';
+          ? 'Réponds uniquement en français clair et concis.'
+          : language === 'en'
+            ? 'Reply only in clear, concise English.'
+            : 'اكتب جميع القيم النصية بالعربية الفصحى البسيطة فقط. لا تجب بالإنجليزية أو الفرنسية.';
+        const contextPrompt = isArabic
+          ? `المحصول: ${cropType || 'غير محدد'}؛ الولاية: ${wilaya || 'غير محددة'}؛ طور النمو: ${growthStage || 'غير محدد'}؛ الأعراض: ${description || 'الصورة فقط'}.`
+          : `Crop: ${cropType || 'unspecified'}; region: ${wilaya || 'unspecified'}; stage: ${growthStage || 'unspecified'}; symptoms: ${description || 'image only'}.`;
 
-        const promptText = `
-أنت "طبيب زراعي خبير ومستشار لدعم القرار الزراعي" (Zira3i AI — من الصورة إلى القرار).
-مهمتك ليست مجرد التعرف على الصورة أو تخمين اسم المرض، بل **توجيه الفلاح للإجراء الصحيح الآن**، مع تحذيره صراحة مما يجب تجنبه فوراً لمنع تفاقم الخسائر.
-
-سياق المدخلات:
-- المحصول: ${cropType || 'غير محدد'}
-- الولاية / المنطقة الفلاحية: ${wilaya || 'الجزائر / شمال إفريقيا'}
-- طور نمو النبات: ${growthStage || 'غير محدد'}
-- وصف الفلاح الميداني للأعراض: ${description || 'فحص بصري فقط'}
-- اسم الملف: ${imageName || 'صورة ورقة/نبتة'}
-
-المطلوب إخراج ملف استدلال وقرار JSON حصرياً يحتوي على الحقول التالية:
-1. diseaseName: اسم المرض أو الاضطراب الشائع بالعربية (وبالفرنسية بين قوسين).
-2. scientificName: الاسم العلمي اللاتيني لمسبب المرض.
-3. cropDetected: المحصول المتعرف عليه.
-4. wilayaContext: الولاية أو المنطقة ذات الصلة.
-5. growthStageContext: طور النمو.
-6. qualitativeCertainty: درجة اليقين النوعية وتكون حصراً واحدة من: "high" أو "medium" أو "low" (بدون أي نسب مئوية وهمية).
-7. supportingEvidence: مصفوفة نصوص من 2 إلى 3 أدلة بصرية وسياقية تدعم هذا اليقين.
-8. severity: مستوى الخطورة وتكون واحدة من: "critical", "high", "medium", "low".
-9. favorableConditions: الظروف المناخية أو البيئية المشجعة لظهور هذا المرض في الجزائر.
-10. summary: ملخص تشخيصي دقيق يبين ماذا يحدث للنبات ولماذا.
-11. symptoms: مصفوفة لأبرز 3 أعراض ميدانية.
-12. actionNow: كائن يحتوي على:
-    - headline: عنوان جذاب ومختصر للإجراء (مثال: "تدخل وقائي سريع اليوم لمنع انتقال العدوى للسنبلة")
-    - urgentSteps: مصفوفة من 2 إلى 3 خطوات عاجلة يجب أن يقوم بها الفلاح اليوم أو غداً صباحاً.
-13. warningDoNotDo: تحذير صريح وحاسم يبدأ بـ "🛑 لا تفعل..." يمنع الفلاح من خطأ شائع ومكلف (مثل الرش في الشمس، أو رش مبيد حشري لفطر، أو الإفراط في الري).
-14. followUpSchedule: موعد وإجراء إعادة الفحص الميداني (مثلاً بعد 4 أو 6 أيام وما يجب مراقبته).
-15. treatmentOrganic: مصفوفة من 2 إلى 3 علاجات وممارسات عضوية وبيئية.
-16. treatmentChemical: مصفوفة من 1 إلى 2 مبيد كيميائي بالمادة الفعالة مع التنبيه لفترة الأمان قبل الجني (DAR).
-17. prevention: مصفوفة تدابير وقائية للدورات القادمة.
-18. irrigationSchedule: جدول وتوصية الري المناسبة.
-19. fertilizationAdvice: توجيه التسميد المناسب.
-20. algerianContextNote: ملاحظة خاصة بالولاية والمناخ الجزائري.
-
-${langPrompt}
-`;
+        const promptText = `${langPrompt}
+Analyze this plant image for agricultural decision support. Context: ${contextPrompt}
+Return one valid JSON object only, with exactly these six keys:
+{"disease":"...","severity":"critical|high|medium|low","confidence":"high|medium|low","treatment":["..."],"prevention":["..."],"watering":"..."}
+Keep each value short. Use only visible evidence and context. If uncertain, say so and use low confidence. Do not invent a disease, chemical product, or dose. Never recommend a specific pesticide. ${isArabic ? 'استخدم عربية فصحى بسيطة جداً وجملاً قصيرة. لا تكتب بالإنجليزية إلا عند غياب اسم عربي معروف.' : ''}`;
 
         if (!imageBase64) {
           throw new Error('Brev diagnose requires an image file');
@@ -511,7 +620,8 @@ ${langPrompt}
           throw new Error(`Brev model request failed (${response.status}): ${await response.text()}`);
         }
 
-        const parsed = await response.json() as DiagnosisResult;
+        const fallback = generateLocalDecision(cropType, wilaya, growthStage, description, imageName, language);
+        const parsed = parseDiagnosisResponse(await response.json(), fallback, language);
         parsed.engineUsed = 'agri-chat-llava-onevision';
         return res.json(parsed);
       } catch (modelError: any) {
@@ -548,7 +658,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌾 Zira3i AI (Decision Support) running at http://0.0.0.0:${PORT}`);
-    console.log(`Brev model status: ${isModelConfigured ? `Active (${modelName})` : 'Local Decision Support Engine (Standalone Ready)'}`);
+    console.log(`Brev API key: ${isModelConfigured ? `configured for ${modelName}` : 'not configured; local fallback only'}`);
   });
 }
 

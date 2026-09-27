@@ -18,11 +18,11 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenGuide,
 }) => {
   const [engineStatus, setEngineStatus] = useState<{
-    aiConnected: boolean;
+    aiConfigured: boolean;
     model: string;
     checked: boolean;
   }>({
-    aiConnected: false,
+    aiConfigured: false,
     model: 'zira3i-agri-engine',
     checked: false,
   });
@@ -32,14 +32,14 @@ export const Header: React.FC<HeaderProps> = ({
       .then((res) => res.json())
       .then((data) => {
         setEngineStatus({
-          aiConnected: Boolean(data.aiConnected),
+          aiConfigured: Boolean(data.aiConfigured),
           model: data.model || 'zira3i-agri-engine',
           checked: true,
         });
       })
       .catch(() => {
         setEngineStatus({
-          aiConnected: false,
+          aiConfigured: false,
           model: 'zira3i-agri-engine',
           checked: true,
         });
@@ -83,9 +83,17 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-600"></span>
               </span>
               <span>
-                {engineStatus.aiConnected
-                  ? 'محرك AgriChat متصل'
-                  : 'محرك التشخيص الزراعي الفوري جاهز 100%'}
+                {engineStatus.aiConfigured
+                  ? language === 'fr'
+                    ? 'Clé API configurée'
+                    : language === 'en'
+                      ? 'AI key configured'
+                      : 'مفتاح النموذج مُعدّ'
+                  : language === 'fr'
+                    ? 'Moteur local disponible'
+                    : language === 'en'
+                      ? 'Local fallback available'
+                      : 'المحرك المحلي متاح'}
               </span>
             </div>
 
