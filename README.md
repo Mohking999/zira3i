@@ -470,3 +470,4 @@ source ~/.bashrc
 ---
 
 *Zira3i AI — نظام دعم القرار الزراعي الميداني والتدخل الميداني للفلاح الجزائري والمغاربي. إفصاح استرشادي دائم: هذا التقرير أداة استرشادية لدعم القرار الزراعي، ولا يُغني عن الفحص الميداني والمباشر للمهندس الزراعي أو المرشد المعتمد لدى المعهد الوطني لحماية النباتات (INPV).*
+[![Architecture diagram of mohking999/zira3i](https://gitdiagram.com/mohking999/zira3i/diagram.png)](https://gitdiagram.com/mohking999/zira3i?utm_source=readme&utm_medium=picture)
