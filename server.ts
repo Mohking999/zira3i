@@ -14,10 +14,16 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '25mb' }));
 
-const brevApiUrl = (process.env.BREV_API_URL || 'https://jupyter-63xi24bh0.gobrev.dev').replace(/\/+$/, '');
-const brevApiKey = process.env.BREV_API_KEY || process.env.ZIRA3I_API_KEY;
-const modelName = process.env.AGRI_MODEL || 'AgriChat/LLaVA-OneVision';
-const isModelConfigured = Boolean(brevApiKey && brevApiKey.trim() !== '');
+const openRouterApiKey = process.env.OPENROUTER_API_KEY || '';
+const openRouterModel = process.env.OPENROUTER_MODEL || 'google/gemma-4-26b-a4b-it:free';
+const isOpenRouterConfigured = Boolean(openRouterApiKey.trim());
+const geminiApiKey = process.env.GEMINI_API_KEY || '';
+const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const isGeminiConfigured = Boolean(geminiApiKey.trim());
+const isModelConfigured = isOpenRouterConfigured || isGeminiConfigured;
+const modelName = isOpenRouterConfigured ? openRouterModel : geminiModel;
+const modelProvider = isOpenRouterConfigured ? 'OpenRouter' : isGeminiConfigured ? 'Gemini' : 'local fallback';
+console.log(`[Zira3i] AI provider: ${modelProvider} | Model: ${modelName}`);
 
 interface DiagnosisResult {
   diseaseName: string;
@@ -43,7 +49,7 @@ interface DiagnosisResult {
   irrigationSchedule: string;
   fertilizationAdvice: string;
   algerianContextNote: string;
-  engineUsed: 'agri-chat-llava-onevision' | 'zira3i-agri-engine';
+  engineUsed: 'openrouter-gemma-4-26b-a4b-it' | 'gemini-3.8-flash' | 'zira3i-agri-engine';
 }
 
 function parseDiagnosisResponse(
@@ -71,7 +77,7 @@ function parseDiagnosisResponse(
   }
 
   if (!candidate || typeof candidate !== 'object') {
-    throw new Error('Brev model returned an invalid diagnosis response');
+    throw new Error('AI model returned an invalid diagnosis response');
   }
 
   const diagnosis = candidate as Record<string, unknown>;
@@ -103,7 +109,7 @@ function parseDiagnosisResponse(
     const diseaseName = getText(diagnosis.diseaseName, diagnosis.disease, diagnosis.diagnosis);
     if (!diseaseName || diagnosis.structured === false) {
       const fieldNames = Object.keys(diagnosis).slice(0, 20).join(', ') || 'none';
-      throw new Error(`Brev model returned an incomplete diagnosis response (fields: ${fieldNames})`);
+      throw new Error(`AI model returned an incomplete diagnosis response (fields: ${fieldNames})`);
     }
 
     const severityText = (getText(diagnosis.severity) || '').toLowerCase();
@@ -165,7 +171,7 @@ function parseDiagnosisResponse(
       irrigationSchedule: watering,
       fertilizationAdvice: getText(diagnosis.fertilizationAdvice) || '',
       algerianContextNote: getText(diagnosis.algerianContextNote) || '',
-      engineUsed: 'agri-chat-llava-onevision',
+      engineUsed: 'gemini-3.8-flash',
     };
   }
 
@@ -564,10 +570,27 @@ app.post('/api/diagnose', async (req, res) => {
       description,
       cropType,
       wilaya,
+      locationName,   // free-text or GPS-resolved location (global)
+      countryCode,    // ISO 3166-1 alpha-2
+      latitude,       // GPS decimal degrees
+      longitude,
+      weatherData,    // WeatherData snapshot from Open-Meteo
       growthStage,
       imageName,
       language = 'ar',
     } = req.body;
+
+    // Resolved location: prefer GPS-resolved name, fall back to wilaya text
+    const resolvedLocation = locationName || wilaya || 'غير محدد';
+
+    // Build weather context string for the prompt
+    const weatherCtx = weatherData
+      ? `\nCurrent field weather (Open-Meteo real-time):\n  - Temperature: ${weatherData.temperature}°C\n  - Humidity: ${weatherData.humidity}%\n  - Precipitation last hour: ${weatherData.precipitation} mm\n  - Wind: ${weatherData.windSpeed} km/h\n  - Conditions: ${weatherData.weatherDescription}\n  - Disease risk assessed locally: ${(weatherData.diseaseRiskLevel || '').toUpperCase()}\nUse this weather data to refine disease likelihood and urgency (high humidity + 15-26°C = high fungal risk, recent rain = wet leaf disease spread).`
+      : '';
+
+    const gpsCtx = latitude && longitude
+      ? `\nGPS coordinates: ${Number(latitude).toFixed(4)}°, ${Number(longitude).toFixed(4)}°`
+      : '';
 
     if (!imageBase64 && !description) {
       return res.status(400).json({
@@ -580,52 +603,134 @@ app.post('/api/diagnose', async (req, res) => {
     if (isModelConfigured) {
       try {
         const isArabic = language === 'ar';
-        const langPrompt = language === 'fr'
-          ? 'Réponds uniquement en français clair et concis.'
-          : language === 'en'
-            ? 'Reply only in clear, concise English.'
-            : 'اكتب جميع القيم النصية بالعربية الفصحى البسيطة فقط. لا تجب بالإنجليزية أو الفرنسية.';
+        const isFrench = language === 'fr';
+
         const contextPrompt = isArabic
-          ? `المحصول: ${cropType || 'غير محدد'}؛ الولاية: ${wilaya || 'غير محددة'}؛ طور النمو: ${growthStage || 'غير محدد'}؛ الأعراض: ${description || 'الصورة فقط'}.`
-          : `Crop: ${cropType || 'unspecified'}; region: ${wilaya || 'unspecified'}; stage: ${growthStage || 'unspecified'}; symptoms: ${description || 'image only'}.`;
+          ? `المحصول: ${cropType || 'غير محدد'}؛ الولاية الجزائرية: ${wilaya || 'غير محددة'}؛ طور النمو: ${growthStage || 'غير محدد'}؛ الأعراض الملاحظة: ${description || 'راجع الصورة فقط'}.`
+          : isFrench
+            ? `Culture: ${cropType || 'non précisé'}; Wilaya: ${wilaya || 'non précisée'}; Stade: ${growthStage || 'non précisé'}; Symptômes: ${description || 'voir image uniquement'}.`
+            : `Crop: ${cropType || 'unspecified'}; Region: ${wilaya || 'unspecified'}; Stage: ${growthStage || 'unspecified'}; Symptoms: ${description || 'image only'}.`;
 
-        const promptText = `${langPrompt}
-Analyze this plant image for agricultural decision support. Context: ${contextPrompt}
-Return one valid JSON object only, with exactly these six keys:
-{"disease":"...","severity":"critical|high|medium|low","confidence":"high|medium|low","treatment":["..."],"prevention":["..."],"watering":"..."}
-Keep each value short. Use only visible evidence and context. If uncertain, say so and use low confidence. Do not invent a disease, chemical product, or dose. Never recommend a specific pesticide. ${isArabic ? 'استخدم عربية فصحى بسيطة جداً وجملاً قصيرة. لا تكتب بالإنجليزية إلا عند غياب اسم عربي معروف.' : ''}`;
+        const langInstruction = isArabic
+          ? 'CRITICAL: You MUST write ALL text values in simple Modern Standard Arabic (فصحى مبسطة). Do NOT use English or French words except for scientific names (scientificName field). Every string value must be in Arabic.'
+          : isFrench
+            ? 'CRITICAL: Write ALL text values in clear French. Only scientificName may use Latin.'
+            : 'Write ALL text values in clear English. Only scientificName may use Latin.';
 
-        if (!imageBase64) {
-          throw new Error('Brev diagnose requires an image file');
-        }
+        const promptText = `You are an expert plant pathologist for Algerian agriculture. Analyze the provided plant image and field context. If no image is provided, base the assessment only on the written description.
+Context: ${contextPrompt}
+${langInstruction}
 
-        const cleanBase64 = imageBase64.replace(/^data:image\/[a-z0-9.+-]+;base64,/i, '');
-        const formData = new FormData();
-        formData.append(
-          'file',
-          new Blob([Buffer.from(cleanBase64, 'base64')], { type: mimeType || 'image/jpeg' }),
-          imageName || 'plant-image.jpg',
-        );
-        formData.append('question', promptText);
-
-        const response = await fetch(`${brevApiUrl}/diagnose`, {
-          method: 'POST',
-          headers: {
-            'X-API-Key': brevApiKey || '',
-          },
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error(`Brev model request failed (${response.status}): ${await response.text()}`);
-        }
+Return ONLY a single valid JSON object with EXACTLY these keys (no extra text, no markdown fences):
+{
+  "diseaseName": "${isArabic ? 'اسم المرض بالعربية' : isFrench ? 'nom de la maladie' : 'disease name'}",
+  "scientificName": "Latin name or N/A",
+  "cropDetected": "${isArabic ? 'اسم المحصول' : isFrench ? 'culture détectée' : 'detected crop'}",
+  "qualitativeCertainty": "high|medium|low",
+  "supportingEvidence": ["${isArabic ? 'دليل مرئي 1' : 'visual evidence 1'}", "${isArabic ? 'دليل 2' : 'evidence 2'}"],
+  "severity": "critical|high|medium|low",
+  "favorableConditions": "${isArabic ? 'الظروف المشجعة' : 'favorable conditions'}",
+  "summary": "${isArabic ? 'ملخص قصير للتشخيص بالعربية' : 'short diagnosis summary'}",
+  "actionNow": {
+    "headline": "${isArabic ? 'عنوان الإجراء العاجل' : 'urgent action headline'}",
+    "urgentSteps": ["${isArabic ? 'الخطوة الأولى اليوم' : 'step 1 today'}", "${isArabic ? 'الخطوة الثانية' : 'step 2'}"]
+  },
+  "warningDoNotDo": "${isArabic ? '🛑 لا تفعل كذا...' : '🛑 Do not...'}",
+  "followUpSchedule": "${isArabic ? 'أعد الفحص بعد X أيام' : 'Recheck after X days'}",
+  "treatmentOrganic": ["${isArabic ? 'علاج عضوي' : 'organic treatment'}"],
+  "treatmentChemical": ["${isArabic ? 'علاج كيميائي مع فترة أمان' : 'chemical + DAR'}"],
+  "prevention": ["${isArabic ? 'وقاية للموسم القادم' : 'prevention measure'}"],
+  "irrigationSchedule": "${isArabic ? 'جدول السقي' : 'irrigation schedule'}",
+  "fertilizationAdvice": "${isArabic ? 'توجيه التسميد' : 'fertilization advice'}",
+  "algerianContextNote": "${isArabic ? 'ملاحظة خاصة بالمناخ الجزائري' : 'Algerian agricultural context'}"
+}
+Base diagnosis ONLY on visible symptoms and the provided context. If uncertain, set qualitativeCertainty to "low". Do NOT invent pesticide doses.`;
 
         const fallback = generateLocalDecision(cropType, wilaya, growthStage, description, imageName, language);
-        const parsed = parseDiagnosisResponse(await response.json(), fallback, language);
-        parsed.engineUsed = 'agri-chat-llava-onevision';
+        let modelResponse: unknown;
+
+        if (isOpenRouterConfigured) {
+          const messageContent: Array<Record<string, unknown>> = [{ type: 'text', text: promptText }];
+          if (imageBase64) {
+            const imageUrl = imageBase64.startsWith('data:')
+              ? imageBase64
+              : `data:${mimeType || 'image/jpeg'};base64,${imageBase64}`;
+            messageContent.push({ type: 'image_url', image_url: { url: imageUrl } });
+          }
+
+          const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${openRouterApiKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: openRouterModel,
+              messages: [{ role: 'user', content: messageContent }],
+              temperature: 0.2,
+            }),
+          });
+
+          if (!response.ok) {
+            throw new Error(`OpenRouter request failed (${response.status}): ${await response.text()}`);
+          }
+
+          const completion = await response.json() as {
+            choices?: Array<{ message?: { content?: unknown } }>;
+          };
+          const content = completion.choices?.[0]?.message?.content;
+          if (typeof content !== 'string') {
+            throw new Error('OpenRouter returned no text content');
+          }
+          modelResponse = content;
+        } else {
+          const parts: Array<Record<string, unknown>> = [{ text: promptText }];
+          if (imageBase64) {
+            const dataUrlMatch = imageBase64.match(/^data:([^;]+);base64,/i);
+            const imageMimeType = dataUrlMatch?.[1] || mimeType || 'image/jpeg';
+            const imageData = imageBase64.replace(/^data:[^;]+;base64,/i, '');
+            parts.push({ inlineData: { mimeType: imageMimeType, data: imageData } });
+          }
+
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(geminiModel)}:generateContent`,
+            {
+              method: 'POST',
+              headers: {
+                'x-goog-api-key': geminiApiKey,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                contents: [{ role: 'user', parts }],
+                generationConfig: { responseMimeType: 'application/json', temperature: 0.2 },
+              }),
+            },
+          );
+
+          if (!response.ok) {
+            throw new Error(`Gemini request failed (${response.status}): ${await response.text()}`);
+          }
+
+          const completion = await response.json() as {
+            candidates?: Array<{ content?: { parts?: Array<{ text?: unknown }> } }>;
+          };
+          const content = completion.candidates?.[0]?.content?.parts
+            ?.map((part) => typeof part.text === 'string' ? part.text : '')
+            .join('\n')
+            .trim();
+          if (!content) {
+            throw new Error('Gemini returned no text content');
+          }
+          modelResponse = content;
+        }
+
+        const parsed = parseDiagnosisResponse(modelResponse, fallback, language);
+        parsed.engineUsed = isOpenRouterConfigured
+          ? 'openrouter-gemma-4-26b-a4b-it'
+          : 'gemini-3.8-flash';
         return res.json(parsed);
       } catch (modelError: any) {
-        console.warn('Brev model call failed, falling back to agri-decision engine:', modelError?.message || modelError);
+        console.warn(`${isOpenRouterConfigured ? 'OpenRouter' : 'Gemini'} model call failed, falling back to agri-decision engine:`, modelError?.message || modelError);
         const fallback = generateLocalDecision(cropType, wilaya, growthStage, description, imageName, language);
         return res.json(fallback);
       }
@@ -658,7 +763,7 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`🌾 Zira3i AI (Decision Support) running at http://0.0.0.0:${PORT}`);
-    console.log(`Brev API key: ${isModelConfigured ? `configured for ${modelName}` : 'not configured; local fallback only'}`);
+    console.log(`AI model: ${isModelConfigured ? `configured for ${modelName}` : 'not configured; local fallback only'}`);
   });
 }
 

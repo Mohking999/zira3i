@@ -9,7 +9,12 @@
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop zira3i",
+    "pm2:restart": "pm2 restart zira3i",
+    "pm2:logs": "pm2 logs zira3i",
+    "pm2:status": "pm2 status"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.3",
@@ -27,7 +32,7 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
-    "esbuild": "^0.25.0",
+    "esbuild": "^0.27.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",

@@ -4,10 +4,12 @@ import { DiagnosisView } from './components/DiagnosisView';
 import { BatchUploader } from './components/BatchUploader';
 import { SessionHistory } from './components/SessionHistory';
 import { SAMPLE_CASES, SampleCase } from './data/samples';
-import { DiagnosisData, SupportedLanguage } from './types/diagnosis';
-import { compressImage, requestDiagnosis } from './utils/api';
+import { DiagnosisData, SupportedLanguage, WeatherData, LocationData } from './types/diagnosis';
+import { compressImage, requestDiagnosis, DiagnosisParams } from './utils/api';
+import { getGPSCoordinates, reverseGeocode, fetchWeather } from './utils/geo';
 import { loadDiagnosisHistory, loadHistoryPreference, syncDiagnosisHistory } from './utils/history';
 import { FarmerGuideModal } from './components/FarmerGuideModal';
+import { WeatherWidget } from './components/WeatherWidget';
 import {
   UploadCloud,
   Camera,
@@ -29,6 +31,7 @@ import {
   ShieldAlert,
   BookOpen,
   HelpCircle,
+  Navigation,
 } from 'lucide-react';
 
 const COMMON_CROPS = [
@@ -42,23 +45,7 @@ const COMMON_CROPS = [
   { id: 'other', ar: 'محصول آخر', fr: 'Autre culture', en: 'Other' },
 ];
 
-const ALGERIAN_WILAYAS = [
-  'عين الدفلى',
-  'بسكرة',
-  'معسكر',
-  'سطيف',
-  'البليدة / متيجة',
-  'تيزي وزو',
-  'تيارت',
-  'وادي سوف',
-  'مستغانم',
-  'قالمة',
-  'تلمسان',
-  'ميلة',
-  'الشلف',
-  'بجاية',
-  'ولاية أخرى',
-];
+// Location is now free-text + GPS (global, no hardcoded wilayas)
 
 const GROWTH_STAGES = [
   { id: 'seedling', ar: 'الشتل والإنبات الأولي', fr: 'Semis & Levée' },
@@ -75,7 +62,11 @@ export default function App() {
 
   // PRD F1: Context form states
   const [selectedCrop, setSelectedCrop] = useState<string>('potato');
-  const [wilaya, setWilaya] = useState<string>('عين الدفلى');
+  const [locationInput, setLocationInput] = useState<string>('');
+  const [locationData, setLocationData] = useState<LocationData | null>(null);
+  const [weatherData, setWeatherData] = useState<WeatherData | null>(null);
+  const [isLoadingGPS, setIsLoadingGPS] = useState(false);
+  const [gpsError, setGpsError] = useState<string | null>(null);
   const [growthStage, setGrowthStage] = useState<string>('vegetative');
   const [description, setDescription] = useState<string>('');
   
@@ -130,11 +121,36 @@ export default function App() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  // GPS auto-detect handler
+  const handleDetectGPS = async () => {
+    setIsLoadingGPS(true);
+    setGpsError(null);
+    try {
+      const { lat, lon } = await getGPSCoordinates();
+      const [loc, weather] = await Promise.all([
+        reverseGeocode(lat, lon),
+        fetchWeather(lat, lon, language),
+      ]);
+      setLocationData(loc);
+      setWeatherData(weather);
+      setLocationInput(loc.displayName);
+    } catch (err: any) {
+      const code = err?.code;
+      setGpsError(
+        code === 1
+          ? (language === 'fr' ? 'Accès GPS refusé. Entrez votre localisation manuellement.' : 'تم رفض الوصول إلى GPS. أدخل موقعك يدوياً.')
+          : (language === 'fr' ? 'Impossible de détecter le GPS.' : 'تعذّر تحديد موقعك. حاول مجدداً أو أدخله يدوياً.')
+      );
+    } finally {
+      setIsLoadingGPS(false);
+    }
+  };
+
   // 1-Click sample selection with full context (PRD F5)
   const handleSelectSample = (sample: SampleCase) => {
     setSelectedSampleId(sample.id);
     setSelectedCrop(sample.cropKey);
-    setWilaya(sample.wilaya);
+    setLocationInput(sample.wilaya);
     setGrowthStage(sample.growthStageKey);
     setImagePreview(sample.thumbnailSvg);
     setImageFile(null);
@@ -151,8 +167,10 @@ export default function App() {
       description: language === 'fr' ? sample.descriptionFr : sample.descriptionAr,
       cropType: language === 'fr' ? sample.cropFr : sample.cropAr,
       wilaya: sample.wilaya,
+      locationName: sample.wilaya,
       growthStage: stageLabel,
       imageName: sample.id,
+      weatherData: weatherData || undefined,
       language,
     });
   };
@@ -177,23 +195,19 @@ export default function App() {
       imageBase64: imagePreview || undefined,
       description: description.trim() || undefined,
       cropType: cropLabel,
-      wilaya,
+      wilaya: locationInput || undefined,
+      locationName: locationInput || undefined,
+      countryCode: locationData?.countryCode,
+      latitude: locationData?.latitude,
+      longitude: locationData?.longitude,
+      weatherData: weatherData || undefined,
       growthStage: stageLabel,
       imageName: imageFile?.name || (selectedSampleId ? `${selectedSampleId}.svg` : 'leaf.jpg'),
       language,
     });
   };
 
-  const runDiagnosis = async (params: {
-    imageBase64?: string;
-    mimeType?: string;
-    description?: string;
-    cropType?: string;
-    wilaya?: string;
-    growthStage?: string;
-    imageName?: string;
-    language?: string;
-  }) => {
+  const runDiagnosis = async (params: DiagnosisParams) => {
     setIsProcessing(true);
     setErrorMsg(null);
 
@@ -214,8 +228,13 @@ export default function App() {
         id: `decision-${Date.now()}`,
         timestamp: Date.now(),
         imagePreview: params.imageBase64,
-        wilayaContext: params.wilaya,
+        wilayaContext: params.locationName || params.wilaya,
         growthStageContext: params.growthStage,
+        locationName: params.locationName || params.wilaya,
+        countryCode: params.countryCode,
+        latitude: params.latitude,
+        longitude: params.longitude,
+        weatherSnapshot: params.weatherData,
       };
 
       setDiagnosisResult(enhancedResult);
@@ -417,26 +436,65 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 2 & 3. Wilaya + Growth Stage in 2 columns */}
+              {/* 2 & 3. Location (GPS/free-text) + Growth Stage */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                
-                {/* Wilaya selector */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center gap-1">
+
+                {/* GPS Location input */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-slate-700 flex items-center gap-1">
                     <MapPin className="w-3.5 h-3.5 text-amber-600" />
-                    <span>{language === 'fr' ? 'الولاية الفلاحية (Wilaya) :' : 'الولاية الفلاحية :'}</span>
+                    <span>
+                      {language === 'fr' ? 'Localisation du champ (GPS ou saisie libre) :' : 'موقع الحقل (GPS أو إدخال يدوي) :'}
+                    </span>
                   </label>
-                  <select
-                    value={wilaya}
-                    onChange={(e) => setWilaya(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600"
-                  >
-                    {ALGERIAN_WILAYAS.map((w) => (
-                      <option key={w} value={w}>
-                        {w}
-                      </option>
-                    ))}
-                  </select>
+
+                  {/* Input row */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={locationInput}
+                      onChange={(e) => setLocationInput(e.target.value)}
+                      placeholder={
+                        language === 'fr'
+                          ? 'Ex: Blida, Algérie / Madrid, Espagne...'
+                          : 'مثال: البليدة، الجزائر / القاهرة، مصر...'
+                      }
+                      className="flex-1 bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-600 min-w-0"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleDetectGPS}
+                      disabled={isLoadingGPS}
+                      title={language === 'fr' ? 'Détecter ma position GPS' : 'تحديد موقعي بـ GPS'}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed shrink-0 shadow-sm"
+                    >
+                      {isLoadingGPS
+                        ? <Loader2 className="w-4 h-4 animate-spin" />
+                        : <Navigation className="w-4 h-4" />}
+                      <span className="hidden sm:inline">
+                        {isLoadingGPS
+                          ? (language === 'fr' ? 'Localisation...' : 'جارٍ التحديد...')
+                          : (language === 'fr' ? 'GPS' : 'موقعي')}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* GPS error */}
+                  {gpsError && (
+                    <p className="text-xs text-red-600 font-semibold flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      {gpsError}
+                    </p>
+                  )}
+
+                  {/* Weather Widget — shown after GPS detect */}
+                  {weatherData && locationData && (
+                    <WeatherWidget
+                      weather={weatherData}
+                      location={locationData}
+                      language={language}
+                    />
+                  )}
                 </div>
 
                 {/* Growth Stage selector */}
@@ -456,6 +514,18 @@ export default function App() {
                       </option>
                     ))}
                   </select>
+
+                  {/* GPS prompt if not yet detected */}
+                  {!weatherData && (
+                    <div className="mt-2 p-3 rounded-xl bg-sky-50 border border-sky-200 text-sky-800 text-[11px] font-semibold flex items-center gap-2">
+                      <Navigation className="w-3.5 h-3.5 shrink-0 text-sky-600" />
+                      <span>
+                        {language === 'fr'
+                          ? 'Cliquez sur "GPS" pour obtenir la météo locale et une analyse du risque fongique en temps réel.'
+                          : 'اضغط على "موقعي" للحصول على الطقس المحلي وتحليل خطر الأمراض الفطرية الآن.'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
               </div>

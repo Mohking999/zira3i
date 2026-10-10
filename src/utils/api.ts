@@ -1,6 +1,6 @@
-import { DiagnosisData } from '../types/diagnosis';
+import { DiagnosisData, WeatherData } from '../types/diagnosis';
 
-// In-memory cache taking into account context (crop + wilaya + stage + description + image)
+// In-memory cache taking into account context (crop + location + stage + description + image)
 const decisionCache = new Map<string, DiagnosisData>();
 
 export async function compressImage(
@@ -53,28 +53,32 @@ export async function compressImage(
   });
 }
 
-function computeCacheKey(params: {
-  imageBase64?: string;
-  description?: string;
-  cropType?: string;
-  wilaya?: string;
-  growthStage?: string;
-  language?: string;
-}): string {
-  const imgHash = params.imageBase64 ? params.imageBase64.slice(-100) : 'no-img';
-  return `${params.cropType || 'any'}_${params.wilaya || 'any'}_${params.growthStage || 'any'}_${params.language || 'ar'}_${params.description || ''}_${imgHash}`;
-}
-
-export async function requestDiagnosis(params: {
+export interface DiagnosisParams {
   imageBase64?: string;
   mimeType?: string;
   description?: string;
   cropType?: string;
+  // Location — accepts free-text (wilaya/city/region) or GPS
   wilaya?: string;
+  locationName?: string;
+  countryCode?: string;
+  latitude?: number;
+  longitude?: number;
+  // Weather snapshot at time of diagnosis
+  weatherData?: WeatherData;
   growthStage?: string;
   imageName?: string;
   language?: string;
-}): Promise<DiagnosisData> {
+}
+
+function computeCacheKey(params: DiagnosisParams): string {
+  const imgHash = params.imageBase64 ? params.imageBase64.slice(-100) : 'no-img';
+  const loc = params.locationName || params.wilaya || 'any';
+  const gps = params.latitude ? `${params.latitude.toFixed(3)},${params.longitude?.toFixed(3)}` : '';
+  return `${params.cropType || 'any'}_${loc}_${gps}_${params.growthStage || 'any'}_${params.language || 'ar'}_${params.description || ''}_${imgHash}`;
+}
+
+export async function requestDiagnosis(params: DiagnosisParams): Promise<DiagnosisData> {
   const cacheKey = computeCacheKey(params);
   if (decisionCache.has(cacheKey)) {
     return decisionCache.get(cacheKey)!;
@@ -89,9 +93,7 @@ export async function requestDiagnosis(params: {
     try {
       const res = await fetch('/api/diagnose', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
       });
 
@@ -106,17 +108,21 @@ export async function requestDiagnosis(params: {
             ...(rawData.actionNow || {}),
           },
           supportingEvidence: rawData.supportingEvidence || fallback.supportingEvidence,
-          treatmentOrganic: rawData.treatmentOrganic || fallback.treatmentOrganic,
-          treatmentChemical: rawData.treatmentChemical || fallback.treatmentChemical,
-          prevention: rawData.prevention || fallback.prevention,
+          treatmentOrganic:   rawData.treatmentOrganic   || fallback.treatmentOrganic,
+          treatmentChemical:  rawData.treatmentChemical  || fallback.treatmentChemical,
+          prevention:         rawData.prevention         || fallback.prevention,
+          // Attach GPS + weather to result
+          locationName:  params.locationName || params.wilaya,
+          countryCode:   params.countryCode,
+          latitude:      params.latitude,
+          longitude:     params.longitude,
+          weatherSnapshot: params.weatherData,
         };
         decisionCache.set(cacheKey, data);
         return data;
       }
     } catch {
-      if (attempts >= maxAttempts) {
-        break;
-      }
+      if (attempts >= maxAttempts) break;
       await new Promise((r) => setTimeout(r, 600));
     }
   }

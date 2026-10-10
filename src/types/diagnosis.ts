@@ -9,6 +9,31 @@ export interface AgriculturalContext {
   symptomsBrief: string;
 }
 
+// ─── Weather & GPS ───────────────────────────────────────────────────────────
+
+export interface WeatherData {
+  temperature: number;       // °C
+  humidity: number;          // %
+  precipitation: number;     // mm (last hour)
+  windSpeed: number;         // km/h
+  weatherCode: number;       // WMO weather code
+  weatherDescription: string;
+  diseaseRiskLevel: 'high' | 'medium' | 'low';
+  diseaseRiskReason: string;
+}
+
+export interface LocationData {
+  latitude: number;
+  longitude: number;
+  country: string;
+  countryCode: string;  // ISO 3166-1 alpha-2
+  region: string;
+  city: string;
+  displayName: string;
+}
+
+// ─── Diagnosis ───────────────────────────────────────────────────────────────
+
 export interface DiagnosisData {
   id?: string;
   timestamp?: number;
@@ -20,6 +45,13 @@ export interface DiagnosisData {
   cropDetected: string;
   wilayaContext?: string;
   growthStageContext?: string;
+
+  // GPS & Weather context (global)
+  locationName?: string;
+  countryCode?: string;
+  latitude?: number;
+  longitude?: number;
+  weatherSnapshot?: WeatherData;
 
   // Qualitative Certainty & Evidence (PRD F3 - no fake numerical %)
   qualitativeCertainty: QualitativeCertainty;
@@ -47,7 +79,7 @@ export interface DiagnosisData {
   fertilizationAdvice: string;
   algerianContextNote: string;
 
-  engineUsed?: 'agri-chat-llava-onevision' | 'zira3i-agri-engine';
+  engineUsed?: 'openrouter-gemma-4-26b-a4b-it' | 'gemini-3.8-flash' | 'zira3i-agri-engine';
 }
 
 export interface BatchItem {
